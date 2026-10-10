@@ -1,8 +1,8 @@
-# BDZ Tickets MCP Server — Detailed Plan
+# BDZ tickets MCP server: detailed plan
 
 **Status:** approved (MCP, not skill) · **Created:** 2026-10-10 · **Project dir:** `~/Desktop/bdz-tickets`
 
-An MCP server that lets an AI agent search BDZ (БДЖ) train routes, check live seat availability, quote prices, create a ticket reservation, hand the user a payment link, and fetch issued tickets as PDFs. The **card payment itself always happens in the user's browser** on the BORICA/ePay gateway — the agent never touches card data.
+An MCP server that lets an AI agent search BDZ (БДЖ) train routes, check live seat availability, quote prices, create a ticket reservation, hand the user a payment link, and fetch issued tickets as PDFs. The card payment always happens in the user's browser on the BORICA/ePay gateway. The agent never touches card data.
 
 All API knowledge below was reverse-engineered from `bileti.bdz.bg`'s JS bundle on 2026-10-10 and **verified live** (login, search, seat map, quote, pending-ticket creation, payment handoff shape, ticket list, PDF download).
 
@@ -72,17 +72,17 @@ Safety classes: **R** = read-only/idempotent, **G** = money-adjacent, requires `
   bike?: boolean }                      // adds bike talon addon (id 46)
 ```
 
-1. **bdz_stations** `{ query?: string }` — substring match, case-insensitive, on cached nomenclatures. Resolves "София" → id 2, "Пловдив" → id 3.
-2. **bdz_catalog** `{}` — `seats` (0=—, 23=Седящо I, 25=Седящо II, 10=Спално I, 13=Спално II, 16=Спално бизнес), `classes` (1=Първа, 2=Втора), `discountCardTypes`, `addons`, `paramEur`. Cache 24h in-process; API has a `version` field we can compare later.
-3. **bdz_search_routes** `{ from: string|number, to: string|number, date: "YYYY-MM-DD", return_date?: "YYYY-MM-DD" }` — station args accept id or name (fuzzy-resolve; error listing candidates if ambiguous). Body is the legs array (§3.3); with `return_date` a second reversed leg is appended. Output: per date, options `{route_id, departure, arrival, duration, distance, trains:[{train_id, name, full, first_class, second_class, berth, sell_seats}]}`.
-   ⚠ **`route_id` is fresh per search/day** — never persist across sessions; always search before seat-map/quote/create.
-4. **bdz_seat_map** `{ route_id, train_id, date, from, to, seat_type: 23|25|10|13|16 }` — output: coaches `[{coach_index, coach_type_id, seats:[{seat_id, seat_number, state: "free"|"taken", gender?}]}]` (`seatState` 0=free, 1=taken).
-5. **bdz_quote** `{ legs:[{route_id, train_id, date, seat_type, from, to}], passengers: Passenger[] }` — builds the ticket object (§3.4) minus seat ids, `POST GetTicket?onlyPrice=true` → bare number. Output `{total_price, currency: "EUR"}`.
-6. **bdz_create_ticket** — same input as quote **plus `confirm: true`** and optional `seat_ids` (from seat map; omitted = auto-assign). Calls `onlyPrice=false` → `{ticketIDs, total_price, passengersTickets[].seats}`. Refuses if `confirm` missing (error text tells the model to ask the user first). Server records `{ticket_ids, transaction deadline = now+10min, payload}` for tools 7–8.
-7. **bdz_payment_link** `{ provider: "borica"|"epay", confirm: true }` — uses the pending purchase: `GetTicketPaymentTransaction?&totalPrice=X` body `[ticketIDs]` → `transactionID`; then `Payment/Get/{Borica|Epay}Request?transactionId=N`. Two response shapes (§3.7): `{status:301, url}` → return that URL; `{formFields, url}` → the browser must POST those fields; tool returns the URL **plus a note that it opens via form POST** (fall back: instruct user to buy from the site, or we serve a tiny local redirect page — decide at build time, §8). Refuses if >10 min since create or no pending purchase.
-8. **bdz_check_payment** `{ transaction_id? }` — `GET CheckPayment?...`; defaults to last purchase. Also usable: `bdz_tickets` shows `statusID` per ticket (2=issued, 6=cancelled, 11=pending).
-9. **bdz_tickets** `{ page?: number, include_old?: boolean }` — `GetUserTickets?pageNum=N` (POST `{}`), `totalPages` included; `include_old` → `GetOldUserTickets`.
-10. **bdz_ticket_pdf** `{ ticket_id, save_path? }` — `GET GetTicketPdf?ticketId=` → base64 → write file (default `~/Downloads/{fileName}`), returns `{path, bytes}`.
+1. `bdz_stations` `{ query?: string }`: substring match, case-insensitive, on cached nomenclatures. Resolves "София" → id 2, "Пловдив" → id 3.
+2. `bdz_catalog` `{}`: `seats` (0=—, 23=Седящо I, 25=Седящо II, 10=Спално I, 13=Спално II, 16=Спално бизнес), `classes` (1=Първа, 2=Втора), `discountCardTypes`, `addons`, `paramEur`. Cache 24h in-process; API has a `version` field we can compare later.
+3. `bdz_search_routes` `{ from: string|number, to: string|number, date: "YYYY-MM-DD", return_date?: "YYYY-MM-DD" }`: station args accept id or name (fuzzy-resolve; error listing candidates if ambiguous). Body is the legs array (§3.3); with `return_date` a second reversed leg is appended. Output: per date, options `{route_id, departure, arrival, duration, distance, trains:[{train_id, name, full, first_class, second_class, berth, sell_seats}]}`.
+   Warning: `route_id` is fresh per search/day. Never persist it across sessions; always search again before seat-map, quote, or create.
+4. `bdz_seat_map` `{ route_id, train_id, date, from, to, seat_type: 23|25|10|13|16 }`: output: coaches `[{coach_index, coach_type_id, seats:[{seat_id, seat_number, state: "free"|"taken", gender?}]}]` (`seatState` 0=free, 1=taken).
+5. `bdz_quote` `{ legs:[{route_id, train_id, date, seat_type, from, to}], passengers: Passenger[] }`: builds the ticket object (§3.4) minus seat ids, `POST GetTicket?onlyPrice=true` → bare number. Output `{total_price, currency: "EUR"}`.
+6. `bdz_create_ticket`: same input as quote plus `confirm: true`, and optional `seat_ids` (from seat map; omitted = auto-assign). Calls `onlyPrice=false` → `{ticketIDs, total_price, passengersTickets[].seats}`. Refuses if `confirm` missing (error text tells the model to ask the user first). Server records `{ticket_ids, transaction deadline = now+10min, payload}` for tools 7–8.
+7. `bdz_payment_link` `{ provider: "borica"|"epay", confirm: true }`: uses the pending purchase: `GetTicketPaymentTransaction?&totalPrice=X` body `[ticketIDs]` → `transactionID`; then `Payment/Get/{Borica|Epay}Request?transactionId=N`. Two response shapes (§3.7): `{status:301, url}` → return that URL; `{formFields, url}` → the browser must POST those fields; tool returns the URL plus a note that it opens via form POST (fallback options: instruct the user to buy from the site, or serve a tiny local redirect page; decide at build time, §8). Refuses if >10 min since create or no pending purchase.
+8. `bdz_check_payment` `{ transaction_id? }`: `GET CheckPayment?...`; defaults to last purchase. Also usable: `bdz_tickets` shows `statusID` per ticket (2=issued, 6=cancelled, 11=pending).
+9. `bdz_tickets` `{ page?: number, include_old?: boolean }`: `GetUserTickets?pageNum=N` (POST `{}`), `totalPages` included; `include_old` → `GetOldUserTickets`.
+10. `bdz_ticket_pdf` `{ ticket_id, save_path? }`: `GET GetTicketPdf?ticketId=` → base64 → write file (default `~/Downloads/{fileName}`), returns `{path, bytes}`.
 
 ---
 
@@ -144,7 +144,7 @@ body: {date:"2026-10-11", name:"СОФИЯ - ПЛОВДИВ", route:441650398, t
      seats: [{seatId:38972179, seatNumber:22, seatState:0, genderId:null}, …] } }
 // seatState: 0 = free, 1 = taken; genderId set on sleeper seats (1=m,2=f)
 ```
-`api/schema/blockseat` + `api/schema/ReleaseSeat` exist server-side but are **dead code** in the current bundle — the SPA assigns seats through GetTicket only. Don't build on them.
+`api/schema/blockseat` and `api/schema/ReleaseSeat` exist server-side but are dead code in the current bundle. The SPA assigns seats through GetTicket only. Don't build on them.
 
 ### 3.5 Ticket object + price/ticket creation
 ```
@@ -183,7 +183,7 @@ GET api/Payment/Get/BoricaRequest?transactionId=N      // or EpayRequest
 → (a) {status:301, url:"https://…gateway…"}            → browser: location.replace
 → (b) {formFields:{FIELD:value,…}, url:"https://…"}    → browser: hidden POST form
 ```
-Card entry happens on the gateway; nothing for the MCP to do there. Note `?&totalPrice=` — the literal `&` prefix is what the SPA sends.
+Card entry happens on the gateway; the MCP has nothing to do there. Note that `?&totalPrice=` keeps its literal `&` prefix because that is what the SPA sends.
 
 ### 3.8 Payment status + tickets
 ```
@@ -200,14 +200,14 @@ GET  api/ticket/GetTicketPdf?ticketId=66580738
 ```
 
 ### 3.9 Other known endpoints
-~~`api/Account/{Register, ChangePassword, ChangePhone, ChangeBirthDate, ChangeGender, ForgotPassword, PasswordReset}`~~ — **account-management tools declined by the user (2026-10-10): do not build.** `api/Ticket/ReclamationRequest` + `CancelReclamationRequest?ticketID=` (refund requests, v2 candidate) · `api/Content/GetStaticTexts?view=` · `api/Ticket/GetDepartureTrainInfoList` / `GetArrivalTrainInfoList` · `api/Service/WriteJavascriptExceptionToLog`.
+~~`api/Account/{Register, ChangePassword, ChangePhone, ChangeBirthDate, ChangeGender, ForgotPassword, PasswordReset}`~~: account-management tools declined by the user (2026-10-10), do not build. `api/Ticket/ReclamationRequest` + `CancelReclamationRequest?ticketID=` (refund requests, v2 candidate) · `api/Content/GetStaticTexts?view=` · `api/Ticket/GetDepartureTrainInfoList` / `GetArrivalTrainInfoList` · `api/Service/WriteJavascriptExceptionToLog`.
 
 ### 3.10 Platform constraints (from site copy, observed)
-- **10-minute session** starts at search; pending tickets auto-release when it lapses (verified — a test pending ticket vanished, no charge).
+- A 10-minute session starts at search. Pending tickets auto-release when it lapses (verified: a test pending ticket vanished, no charge).
 - Max passengers per session: 5 seated / 3 sleeper-2nd / 2 sleeper-1st / 1 sleeper-business; mixed genders share a compartment unless bought separately.
 - Sale windows & excluded trains are announced on the homepage (e.g. seated sales currently to 19.10; БВ1621 София–Пловдив excluded). Surface the homepage banner text in `bdz_search_routes` errors when relevant.
 - Reservation is mandatory on fast trains (БВ); not required on ПВ/КПВ.
-- Seat choice optional — omitted seat → system auto-assigns.
+- Seat choice is optional. Omit the seat and the system auto-assigns one.
 
 ---
 
@@ -223,32 +223,32 @@ GET  api/ticket/GetTicketPdf?ticketId=66580738
 
 ## 5. Testing
 
-1. **Offline unit** — payload builders + response parsers against captured fixtures (`src/fixtures/`: search response, seat map, preview, tickets page, token response). Station fuzzy-resolver cases (exact, partial, ambiguous, id passthrough).
-2. **Live read-only** — a script hitting stations/search/seat-map/quote for Sofia→Plovdiv tomorrow; asserts shapes, no side effects. Safe to run anytime.
-3. **Create-and-expire** — gated behind an explicit env (`BDZ_LIVE_CREATE=1`): creates one pending ticket on a cheap route, asserts the response, then **lets it expire** (never calls payment_link in tests). Verified harmless during recon.
-4. **Manual E2E** — one real purchase by the user, agent-driven, paying the gateway URL in their own browser.
+1. Offline unit: payload builders + response parsers against captured fixtures (`src/fixtures/`: search response, seat map, preview, tickets page, token response). Station fuzzy-resolver cases (exact, partial, ambiguous, id passthrough).
+2. Live read-only: a script hitting stations/search/seat-map/quote for Sofia→Plovdiv tomorrow; asserts shapes, no side effects. Safe to run anytime.
+3. Create-and-expire: gated behind an explicit env (`BDZ_LIVE_CREATE=1`). Creates one pending ticket on a cheap route, asserts the response, then lets it expire (never calls payment_link in tests). Verified harmless during recon.
+4. Manual E2E: one real purchase by the user, agent-driven, paying the gateway URL in their own browser.
 
 ---
 
 ## 6. ZCode registration
 
-At build time, register the stdio server (command `bun`, args `…/bdz-tickets/src/index.ts`) in the user-scope MCP config so it's available in every workspace, then verify with a live `bdz_stations` call. (Exact config file per current ZCode docs — `zcode mcp add` / user settings — checked during milestone 5.)
+At build time, register the stdio server (command `bun`, args `…/bdz-tickets/src/index.ts`) in the user-scope MCP config so it's available in every workspace, then verify with a live `bdz_stations` call. (Exact config file per current ZCode docs (`zcode mcp add` or user settings), checked during milestone 5.)
 
 ---
 
 ## 7. Build order
 
-1. **M1 — read-only core**: scaffold, auth+token cache, nomenclatures cache, stations/search tools. Usable for lookups immediately.
-2. **M2 — availability & price**: seat map + quote (payload builders + fixtures).
-3. **M3 — purchase**: create_ticket + payment_link + check_payment, gated, deadline-aware.
-4. **M4 — library**: tickets list + PDF download.
-5. **M5 — polish**: ZCode registration, README, error-message pass (plain language), git init + first commit, optional push to Gitea (`lyubo/bdz-tickets`, private).
+1. M1 (read-only core): scaffold, auth+token cache, nomenclatures cache, stations/search tools. Usable for lookups immediately.
+2. M2 (availability and price): seat map + quote (payload builders + fixtures).
+3. M3 (purchase): create_ticket + payment_link + check_payment, gated, deadline-aware.
+4. M4 (library): tickets list + PDF download.
+5. M5 (polish): ZCode registration, README, error-message pass (plain language), git init + first commit, optional push to Gitea (`lyubo/bdz-tickets`, private).
 
 ---
 
 ## 8. Open items / decisions at build time
 
 - **Gateway form-POST case** (3.7b): if ePay/Borica returns `formFields`, a bare URL isn't enough. Options: (a) tiny local HTML page the tool writes that auto-submits the form, (b) instruct the user manually. Lean (a).
-- **Reclamation (refund) tooling** — v2 once v1 is proven.
-- **Multi-profile support** (more than one BDZ account) — not needed now.
-- **`GetDepartureTrainInfoList`/`GetArrival`** — only if transfer-route details prove necessary.
+- Reclamation (refund) tooling: v2 once v1 is proven.
+- Multi-profile support (more than one BDZ account): not needed now.
+- `GetDepartureTrainInfoList`/`GetArrival`: only if transfer-route details prove necessary.

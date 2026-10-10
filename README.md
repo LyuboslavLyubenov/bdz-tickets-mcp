@@ -1,73 +1,102 @@
-# bdz-tickets MCP server
+# bdz-tickets
 
-An MCP server for the Bulgarian State Railways (БДЖ) e-ticketing platform
-[bileti.bdz.bg](https://bileti.bdz.bg) — search routes, check live seat availability, quote prices,
-create a pending ticket reservation, get a payment link, and download issued tickets as PDFs.
+An MCP server for the BDZ e-ticket site [bileti.bdz.bg](https://bileti.bdz.bg), the
+Bulgarian State Railways booking platform. It searches trains, shows live seat
+availability, quotes prices, creates reservations, and hands you the payment link.
+You pay in your browser on the BORICA or ePay gateway; the server never sees card
+data. A reservation you don't pay expires after about 10 minutes with no charge.
 
-**The agent never pays.** Card entry always happens in your browser on the BORICA/ePay gateway.
-Pending (unpaid) tickets auto-expire after ~10 minutes with no charge.
-
-## Setup
-
-```bash
-bun install
-cp .env.example .env        # then fill in your bileti.bdz.bg email + password
-bun test                    # offline unit tests
-bun scripts/verify-live.ts --seats   # live read-only smoke (login, search, seat map, quote)
-```
+The server talks to the JSON API that the site's own JavaScript uses
+(`tickets.bdz.bg/portal`), so there is no browser automation anywhere. Bearer-token
+auth, plain fetch, Bun runtime. PLAN.md documents every endpoint, payload, and
+constraint I could reverse from the site.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `bdz_stations` | search the 697 BDZ stations by name fragment |
-| `bdz_catalog` | seat/reservation types, classes, discount cards, add-ons |
-| `bdz_refresh_cache` | drop the cached catalog |
-| `bdz_search_routes` | trains between two stations for a date (+ optional return) |
-| `bdz_seat_map` | live per-coach free/taken seats for one train |
+| `bdz_stations` | searches the 697 BDZ stations by name fragment |
+| `bdz_catalog` | seat types, classes, discount cards, add-ons |
+| `bdz_refresh_cache` | drops the cached catalog |
+| `bdz_search_routes` | trains between two stations for a date, optional return date |
+| `bdz_seat_map` | per-coach free and taken seats for one train |
 | `bdz_quote` | exact total price, creates nothing |
-| `bdz_create_ticket` | **gated** — creates the pending reservation (10-min window) |
-| `bdz_payment_link` | **gated** — returns the BORICA/ePay payment URL for the user to open |
+| `bdz_create_ticket` | creates the pending reservation, 10-minute window |
+| `bdz_payment_link` | returns the BORICA or ePay payment handoff |
 | `bdz_check_payment` | payment status of a transaction |
-| `bdz_tickets` | ticket history (issued / cancelled / pending) |
-| `bdz_ticket_pdf` | download a paid ticket as PDF |
+| `bdz_tickets` | ticket history, issued / cancelled / pending |
+| `bdz_ticket_pdf` | downloads a paid ticket as PDF |
 
-The two money-adjacent tools require `confirm: true`; both the MCP schema and the handlers refuse
-otherwise. `bdz_create_ticket` reserves a real seat — the calling model must show you the
-route/passengers/price first and get your approval.
+`bdz_create_ticket` and `bdz_payment_link` refuse to run without `confirm: true`.
+The calling agent has to show you the route, passengers, and price first and get
+your approval. That refusal works at two layers: the MCP schema rejects the missing
+argument, and the handler rejects `confirm: false` with instructions.
 
-## Typical purchase flow
+## Setup
 
-1. `bdz_stations` → ids · 2. `bdz_search_routes` → pick option (route_id/train_id) ·
-3. `bdz_seat_map` (optional — specific seat) · 4. `bdz_quote` → confirm with user ·
-5. `bdz_create_ticket` `confirm:true` → pending ticket · 6. `bdz_payment_link` `confirm:true` →
-gateway URL/form fields (user pays in browser) · 7. `bdz_check_payment` / `bdz_tickets` →
-`bdz_ticket_pdf`.
+```
+bun install
+cp .env.example .env    # fill in your bileti.bdz.bg email + password
+bun test                # offline unit tests
+```
 
-BORICA answers with a **form POST** payload (`pay_url` + `form_fields`): write a tiny
-auto-submitting HTML page and open it. ePay typically answers with a plain redirect URL.
+Register it with an MCP client. For ZCode, add to `~/.zcode/cli/config.json`:
 
-## Notes & constraints
+```json
+{
+  "mcp": {
+    "servers": {
+      "bdz-tickets": {
+        "command": "/absolute/path/to/bun",
+        "args": ["/absolute/path/to/bdz-tickets/src/index.ts"]
+      }
+    }
+  }
+}
+```
 
-- `route_id` values are session-scoped — re-search before buying on a later day.
-- BDZ payment sessions last ~10 minutes; the server tracks the deadline and refuses stale payments.
-- Max 5 seated / 3 sleeper-2nd / 2 sleeper-1st / 1 business tickets per session.
-- Bearer tokens are cached at `~/.config/bdz-tickets/token.json` (chmod 600) and refreshed on 401.
-- Credentials live in `.env` (gitignored). Never commit it; rotate if exposed.
+Any other MCP client that spawns stdio servers works the same way.
+
+## Buying a ticket
+
+1. `bdz_stations` for the station ids
+2. `bdz_search_routes` and pick a train (you get `route_id` and `train_id`)
+3. `bdz_seat_map` if you care about the specific seat
+4. `bdz_quote`, then agree on the trip with the person paying
+5. `bdz_create_ticket` with `confirm: true`. This reserves a real seat and starts
+   BDZ's 10-minute payment session
+6. `bdz_payment_link` with `confirm: true`. BORICA answers with a form POST
+   (`pay_url` plus `form_fields`), so write a small auto-submitting HTML page and
+   open it. ePay usually returns a plain redirect URL instead
+7. `bdz_check_payment` or `bdz_tickets`, then `bdz_ticket_pdf`
+
+## Behavior worth knowing
+
+- `route_id` values change with every search. Search again before buying on another
+  day, and again if the payment window lapses.
+- BDZ caps a session at 5 seated, 3 sleeper second class, 2 sleeper first class, or
+  1 business ticket.
+- The bearer token is cached at `~/.config/bdz-tickets/token.json` with 600
+  permissions and refreshed automatically on 401. Credentials live in `.env`, which
+  git ignores. Rotate the password if it leaks.
 
 ## Verification scripts
 
-```bash
-bun scripts/mcp-call.ts                 # list tools through a real MCP client
-bun scripts/mcp-call.ts bdz_stations '{"query":"плов"}'
-bun scripts/verify-live.ts --seats      # read-only live smoke
-bun scripts/verify-m3.ts --pdf          # gated purchase flow — creates one pending ticket, NEVER pays
+```
+bun scripts/mcp-call.ts                                   # list tools through a real MCP client
+bun scripts/mcp-call.ts bdz_stations '{"query":"плов"}'    # one tool call
+bun scripts/verify-live.ts --seats                        # read-only: login, search, seat map, quote
+bun scripts/verify-m3.ts --pdf                            # full gated flow, never pays
 ```
 
-`verify-m3.ts` leaves an unpaid pending ticket that expires by itself (observed: BDZ cancels it as
-"Отказано плащане от оператор", seat freed, no charge). Do not run it more often than needed.
+`verify-m3.ts` creates one real pending reservation and opens a BORICA transaction,
+then stops. BDZ cancels the unpaid reservation on its own; the observed status is
+"Отказано плащане от оператор", the seat is freed, and nothing is charged. Don't run
+it more often than you need to.
 
 ## Layout
 
-`src/api/` HTTP+auth · `src/domain/` payload builders & session state · `src/tools/` MCP tools ·
-`tests/` offline unit tests · `PLAN.md` full reverse-engineered API reference and design.
+`src/api/` holds the HTTP client, auth, and typed endpoints. `src/domain/` holds the
+payload builders and purchase-session state. `src/tools/` holds the MCP tool
+registrations. `tests/` runs offline against payloads captured from the live site.
+PLAN.md is the full API reference and design doc.
