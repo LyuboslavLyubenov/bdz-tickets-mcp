@@ -34,6 +34,23 @@ argument, and the handler rejects `confirm: false` with instructions.
 
 ## Setup
 
+Point any coding agent at this repo and ask it to install, or run one command yourself:
+
+```
+git clone https://github.com/LyuboslavLyubenov/bdz-tickets-mcp.git
+cd bdz-tickets-mcp
+bun scripts/setup.ts
+```
+
+The script installs dependencies, creates `.env` from the template, and registers the
+server in every client it finds: ZCode, opencode, Codex, and Claude (via `claude mcp add
+--scope user`, or the Claude Desktop config). It is idempotent. Restrict it with
+`--client zcode|opencode|codex|claude`. If `.env` was just created, add your bileti.bdz.bg
+email and password to it, then restart the client(s). `AGENTS.md` spells this out for
+agents.
+
+Manual setup, if you prefer:
+
 ```
 bun install
 cp .env.example .env    # fill in your bileti.bdz.bg email + password
