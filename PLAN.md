@@ -199,8 +199,8 @@ GET  api/ticket/GetTicketPdf?ticketId=66580738
 → {fileName:"Ticket_044012197955.pdf", pdf:"<base64>"}   // verified real PDF
 ```
 
-### 3.9 Other known endpoints (not in v1)
-`api/Ticket/ReclamationRequest` + `CancelReclamationRequest?ticketID=` (refund requests) · `api/Account/{Register, ChangePassword, ChangePhone, ChangeBirthDate, ChangeGender?gender=, ForgotPassword, PasswordReset}` · `api/Content/GetStaticTexts?view=` · `api/Ticket/GetDepartureTrainInfoList` / `GetArrivalTrainInfoList` · `api/Service/WriteJavascriptExceptionToLog`.
+### 3.9 Other known endpoints
+~~`api/Account/{Register, ChangePassword, ChangePhone, ChangeBirthDate, ChangeGender, ForgotPassword, PasswordReset}`~~ — **account-management tools declined by the user (2026-10-10): do not build.** `api/Ticket/ReclamationRequest` + `CancelReclamationRequest?ticketID=` (refund requests, v2 candidate) · `api/Content/GetStaticTexts?view=` · `api/Ticket/GetDepartureTrainInfoList` / `GetArrivalTrainInfoList` · `api/Service/WriteJavascriptExceptionToLog`.
 
 ### 3.10 Platform constraints (from site copy, observed)
 - **10-minute session** starts at search; pending tickets auto-release when it lapses (verified — a test pending ticket vanished, no charge).
