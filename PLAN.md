@@ -242,7 +242,7 @@ At build time, register the stdio server (command `bun`, args `…/bdz-tickets/s
 2. M2 (availability and price): seat map + quote (payload builders + fixtures).
 3. M3 (purchase): create_ticket + payment_link + check_payment, gated, deadline-aware.
 4. M4 (library): tickets list + PDF download.
-5. M5 (polish): ZCode registration, README, error-message pass (plain language), git init + first commit, optional push to Gitea (`lyubo/bdz-tickets`, private).
+5. M5 (polish): ZCode registration, README, error-message pass (plain language), git init + first commit, optional push to Gitea (`lyubo/bdz-tickets-mcp`, private).
 
 ---
 

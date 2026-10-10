@@ -1,5 +1,5 @@
 {
-  "name": "bdz-tickets",
+  "name": "bdz-tickets-mcp",
   "module": "index.ts",
   "type": "module",
   "private": true,

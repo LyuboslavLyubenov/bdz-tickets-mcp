@@ -1,4 +1,4 @@
-# bdz-tickets
+# bdz-tickets-mcp
 
 An MCP server for the BDZ e-ticket site [bileti.bdz.bg](https://bileti.bdz.bg), the
 Bulgarian State Railways booking platform. It searches trains, shows live seat
