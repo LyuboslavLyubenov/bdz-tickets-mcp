@@ -52,6 +52,11 @@ export async function invalidateToken() {
   await unlink(TOKEN_PATH).catch(() => {});
 }
 
+/** Test-only: prime the in-memory token so no disk cache or network login is used. */
+export function primeTokenForTests(token = "test-token") {
+  memory = { token, expiresAtMs: Date.now() + 3600_000 };
+}
+
 export function freshToken(): string | null {
   const fresh = (e: CachedToken) => e.expiresAtMs > Date.now() + EXPIRY_MARGIN_MS;
   if (memory && fresh(memory)) return memory.token;

@@ -1,5 +1,7 @@
 // Pure builders for the GetTicket payload — no I/O, fully unit-testable.
 
+import { SESSION_TTL_MS } from "./session.ts";
+
 export type PassengerInput = {
   names: string;
   gender: "m" | "f";
@@ -122,5 +124,68 @@ export function buildSeatMapRequest(
       type: Number(String(p.discount_card_type_id ?? -1)) < 0 ? 0 : p.discount_card_type_id!,
       seatTypeId: leg.seat_type_id,
     })),
+  };
+}
+
+// ---- create-supersession decision (2026-10-26 lesson) ----------------------
+// BDZ holds one pending purchase per account; a second create releases the first.
+
+export type ExistingPurchase = {
+  ticket_ids: number[];
+  total_price: number;
+  created_at_ms: number;
+};
+
+export type CreateDecision =
+  | { allowed: true; superseded_ticket_ids: number[] | null; warning: string | null }
+  | { allowed: false; reason: string };
+
+/** Pure pre-flight for bdz_create_ticket: refuse or warn before any BDZ call. */
+export function decideCreate(
+  existing: ExistingPurchase | null,
+  opts: { supersede?: boolean; nowMs?: number } = {},
+): CreateDecision {
+  const now = opts.nowMs ?? Date.now();
+  const live =
+    !!existing && existing.ticket_ids.length > 0 && now - existing.created_at_ms <= SESSION_TTL_MS;
+  if (!existing || !live) {
+    return { allowed: true, superseded_ticket_ids: null, warning: null };
+  }
+  const ids = existing.ticket_ids;
+  if (!opts.supersede) {
+    return {
+      allowed: false,
+      reason:
+        `A pending purchase already exists (ticket(s) ${ids.join(", ")}, still inside its ~10-minute ` +
+        "payment window). BDZ holds only ONE pending purchase per account, so creating a new reservation " +
+        "would silently release it. Pay it via bdz_payment_link, or let it expire (~10 minutes, no charge), " +
+        "or re-confirm the price with the user and call again with supersede:true.",
+    };
+  }
+  return {
+    allowed: true,
+    superseded_ticket_ids: ids,
+    warning:
+      `Superseded pending ticket(s) ${ids.join(", ")}: BDZ has released them. ` +
+      "Booking legs separately forfeits the round-trip discount (~30% off the return leg, combined " +
+      "bookings only), so the new total will differ from the earlier round-trip quote. Re-quote and " +
+      "re-confirm the price with the user before generating the payment link.",
+  };
+}
+
+// ---- quote availability annotation (2026-10-26 lesson) ---------------------
+// Quotes price combinations the booking API may refuse; annotate honestly.
+
+export type LegAvailability = { free_seats: number; available: boolean };
+
+export function annotateQuoteLegs(availabilities: LegAvailability[]) {
+  const bookable = availabilities.length > 0 && availabilities.every((a) => a.available);
+  return {
+    legs: availabilities,
+    bookable,
+    price_is_theoretical: !bookable,
+    note: bookable
+      ? "Every leg has free seats for this reservation type. The ~30% return discount applies only when both legs are booked in ONE create_ticket call."
+      : "PRICE IS THEORETICAL: at least one leg is sold out for this reservation type. Do not present this total as bookable; pick another seat type, train or date.",
   };
 }

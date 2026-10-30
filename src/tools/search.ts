@@ -97,7 +97,8 @@ export function registerSearchTool(server: McpServer) {
         "Search BDZ trains between two stations for a date (optionally with a return date). " +
         "Inputs accept station ids (preferred, from bdz_stations) or exact station names. " +
         "Returns train options with route_id / train_id — those feed bdz_seat_map, bdz_quote and bdz_create_ticket. " +
-        "route_ids are session-scoped: always search again before buying on a later day.",
+        "route_ids are session-scoped: always search again before buying on a later day. " +
+        "first_class/sleeper_available mean the train CARRIES such coaches, not that seats are free — confirm with bdz_seat_map.",
       inputSchema: {
         from: z.union([z.string(), z.number()]).describe("Departure station id or name."),
         to: z.union([z.string(), z.number()]).describe("Arrival station id or name."),

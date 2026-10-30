@@ -36,16 +36,42 @@ and PDF download.
 | Live read-only smoke | `bun scripts/verify-live.ts --seats` |
 | One tool call via MCP client | `bun scripts/mcp-call.ts <tool> '<json>'` |
 | List tools via MCP client | `bun scripts/mcp-call.ts` |
+| Purchase guard smoke (offline, no network) | `BDZ_DRY_RUN=1 bun scripts/verify-dry-run.ts` |
 | Full gated purchase flow (asks first) | `bun scripts/verify-m3.ts [--pdf]` |
+| Gateway shape check, creates one reservation (asks first) | `bun scripts/verify-payment-shape.ts` |
+
+## Purchase flow rules (2026-10-26 lessons)
+
+A real booking failed end to end that day: the outbound reservation was silently released,
+every quoted round-trip price was unbookable, and the user never received a usable payment
+link before the window closed. Rules that prevent a repeat:
+
+- One leg at a time: reserve a leg, send the payment link, see it paid, then reserve the next.
+  BDZ holds one pending purchase per account; a second create releases the first.
+- Totals come from `bdz_quote` only, never from adding one-way prices. The ~30% return
+  discount applies only inside ONE combined booking; per-leg bookings cost more.
+- Quotes do not check availability. Use `bdz_quote` with `check_availability: true` (pass the
+  train `stations` strings) before presenting a price as bookable.
+- Use `provider: "auto"` in `bdz_payment_link`. ePay returns a plain URL; BORICA never does,
+  so the server hosts the signed form as a local `127.0.0.1` page. Either way the user gets
+  one clickable link. Never write HTML files to disk, and send the link in the same reply
+  that generated it.
+- After any payment failure, check `bdz_tickets` before explaining anything. `rc: -24` on
+  `bdz_check_payment` means the window expired unpaid; it is not a card decline.
 
 ## Layout
 
 ```
-src/api/       client.ts (fetch + 401 retry), auth.ts (token cache), endpoints.ts (typed calls)
-src/domain/    purchase.ts (pure payload builders), nomenclatures-cache.ts, session.ts (deadline state)
+src/api/       client.ts (fetch + 401 retry + test fetch shim), auth.ts (token cache),
+               endpoints.ts (typed calls), payserver.ts (local form-POST pages), errors.ts
+src/domain/    purchase.ts (pure builders + create/quote decisions), payform.ts (gateway HTML),
+               paystatus.ts (CheckPayment interpretation), nomenclatures-cache.ts,
+               session.ts (deadline + pending purchase state)
 src/tools/     one module per tool group; zod schemas in shapes.ts
-scripts/       setup.ts (installer), verify-live.ts, verify-m3.ts, mcp-call.ts, lib/configs.ts
+scripts/       setup.ts (installer), verify-live.ts, verify-m3.ts, verify-dry-run.ts,
+               verify-payment-shape.ts, mcp-call.ts, lib/configs.ts
 tests/         offline unit tests; fixtures are inline, captured from the live site
+               (tests/replay-oct26.test.ts replays the real failed booking)
 ```
 
 ## Conventions
@@ -76,6 +102,14 @@ tests/         offline unit tests; fixtures are inline, captured from the live s
   the current bundle. Do not build on them; seats are assigned through `GetTicket`.
 - BORICA answers with a form POST (`pay_url` + `form_fields`), ePay usually with a redirect
   URL. The gateway path has no slash: `api/Payment/GetBoricaRequest?transactionId=N`.
+- BDZ allows exactly ONE pending purchase per account. A second `GetTicket` (onlyPrice=false)
+  silently releases the previous reservation; the server's supersede guard exists for this.
+- Quotes (`GetTicket?onlyPrice=true`) do not validate seat availability: they price sold-out
+  combinations. `first_class` / `sleeper_available` in search results mean the train carries
+  such coaches, not that berths are free.
+- `Payment/CheckPayment` `rc: -24` with no approval and no card data means the payment window
+  expired unpaid. Ticket status 15 ("Отказано плащане от оператор") is the same situation, not
+  a card decline. A paid round trip exists (2026-10-06), so online payment works for the user.
 - Account-management endpoints (password, phone, birthdate, gender) are mapped in PLAN.md
   but deliberately not built. Do not add tools for them.
 

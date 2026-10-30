@@ -3,7 +3,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOldUserTickets, getUserTickets, getTicketPdf, type UserTicket } from "../api/endpoints.ts";
 import { handle } from "./common.ts";
 
-const STATUS = { 2: "issued (paid)", 6: "cancelled", 11: "pending (unpaid)" } as Record<number, string>;
+const STATUS = {
+  2: "issued (paid)",
+  6: "cancelled",
+  11: "pending (unpaid)",
+  15: "payment_not_completed (expired or declined — nothing charged)",
+} as Record<number, string>;
 
 function compactTicket(t: UserTicket) {
   return {
@@ -27,7 +32,8 @@ export function registerLibraryTools(server: McpServer) {
     "bdz_tickets",
     {
       title: "BDZ ticket history",
-      description: "Lists the account's tickets, newest page first. status 2=issued(paid), 6=cancelled, 11=pending(unpaid).",
+      description:
+        "Lists the account's tickets, newest page first. status 2=issued(paid), 6=cancelled, 11=pending(unpaid), 15=payment_not_completed (window expired or payment refused; nothing charged).",
       inputSchema: {
         page: z.number().int().min(1).default(1),
         include_old: z.boolean().optional().describe("Also fetch the archived (older) tickets page."),

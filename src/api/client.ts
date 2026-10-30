@@ -11,6 +11,15 @@ export type RequestOptions = {
   auth?: boolean;
 };
 
+// Test seam: offline tests inject a fixture router instead of real network.
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+let fetchImpl: FetchLike = (input, init) => fetch(input, init);
+
+/** Test-only: route every bdzFetch call through a fake implementation. Pass null to restore. */
+export function setFetchImpl(f: FetchLike | null) {
+  fetchImpl = f ?? ((input, init) => fetch(input, init));
+}
+
 /**
  * Single JSON call against tickets.bdz.bg/portal.
  * On 401 the cached token is dropped and the call is retried once with a fresh login.
@@ -26,7 +35,7 @@ export async function bdzFetch(path: string, opts: RequestOptions = {}, retried 
 
   let res: Response;
   try {
-    res = await fetch(BASE_URL + path, { method: opts.method ?? (body !== undefined ? "POST" : "GET"), headers, body });
+    res = await fetchImpl(BASE_URL + path, { method: opts.method ?? (body !== undefined ? "POST" : "GET"), headers, body });
   } catch (e) {
     throw new Error(`Cannot reach BDZ API (${path}): network error — ${e}`);
   }

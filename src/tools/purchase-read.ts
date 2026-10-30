@@ -1,7 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getSeatMap, quotePrice } from "../api/endpoints.ts";
-import { buildSeatMapRequest, buildTicketObject, ticketClassForSeatType } from "../domain/purchase.ts";
+import { BdzApiError, mapBdzErrorMessage } from "../api/errors.ts";
+import {
+  annotateQuoteLegs,
+  buildTicketObject,
+  ticketClassForSeatType,
+  type LegAvailability,
+} from "../domain/purchase.ts";
 import { handle } from "./common.ts";
 import { legSchema, passengerSchema, type LegArgs, type PassengerArgs } from "./shapes.ts";
 
@@ -67,6 +73,64 @@ export function registerSeatMapTool(server: McpServer) {
   );
 }
 
+// ---- quote ------------------------------------------------------------------
+
+export type QuoteArgs = {
+  legs: LegArgs[];
+  passengers: PassengerArgs[];
+  check_availability?: boolean;
+  stations?: string[];
+};
+
+export async function quoteImpl(args: QuoteArgs): Promise<any> {
+  const ticket = buildTicketObject({ legs: args.legs, passengers: args.passengers });
+  const total = await quotePrice(ticket);
+  const base = {
+    total_price: total,
+    currency: "EUR",
+    ticket_class: ticketClassForSeatType(args.legs[0]!.seat_type_id),
+    passengers: args.passengers.length,
+    legs: args.legs.length,
+  };
+  if (!args.check_availability) return base;
+
+  // Quotes do not check seat availability server-side (2026-10-26 lesson: they
+  // happily price sold-out combinations). Cross-check each leg's seat map.
+  if (!args.stations || args.stations.length !== args.legs.length) {
+    throw new Error(
+      "check_availability requires 'stations': the train's 'stations' string from bdz_search_routes for each leg, in the same order as legs.",
+    );
+  }
+  const availabilities: LegAvailability[] = [];
+  for (let i = 0; i < args.legs.length; i++) {
+    const leg = args.legs[i]!;
+    try {
+      const raw = await getSeatMap({
+        date: leg.date,
+        name: args.stations[i]!,
+        route: leg.route_id,
+        train: leg.train_id,
+        people: [
+          { gender: "m", id: 1, name: "Availability check", type: 0, seatTypeId: leg.seat_type_id },
+        ],
+      });
+      const free = Object.values(raw).reduce(
+        (n, coach) => n + coach.seats.filter((s) => s.seatState === 0).length,
+        0,
+      );
+      availabilities.push({ free_seats: free, available: free > 0 });
+    } catch (e) {
+      // "Няма намерени свободни места!" (HTTP 400) = this class is sold out.
+      if (e instanceof BdzApiError && mapBdzErrorMessage(e.message)?.code === "no_free_seats") {
+        availabilities.push({ free_seats: 0, available: false });
+      } else {
+        throw e;
+      }
+    }
+  }
+  return { ...base, availability: annotateQuoteLegs(availabilities) };
+}
+
 export function registerQuoteTool(server: McpServer) {
   server.registerTool(
     "bdz_quote",
@@ -74,23 +138,22 @@ export function registerQuoteTool(server: McpServer) {
       title: "BDZ price quote",
       description:
         "Exact total price (EUR) for a set of legs × passengers. Creates nothing — safe to call any time. " +
-        "Derives the travel class from seat_type_id (23/10/16 → 1st, 25/13 → 2nd).",
+        "Derives the travel class from seat_type_id (23/10/16 → 1st, 25/13 → 2nd). " +
+        "Quotes do NOT check seat availability: with check_availability=true each leg's seat map is cross-checked and the result is marked bookable or price_is_theoretical. " +
+        "The ~30% return discount applies only inside ONE combined booking; per-leg bookings cost more. Totals must come from this tool, never from adding one-way prices.",
       inputSchema: {
         legs: z.array(legSchema).min(1).max(2).describe("Outbound leg, plus the return leg for round trips."),
         passengers: z.array(passengerSchema).min(1).max(5),
+        check_availability: z
+          .boolean()
+          .optional()
+          .describe("Cross-check each leg's seat map and mark the quote bookable or theoretical."),
+        stations: z
+          .array(z.string())
+          .optional()
+          .describe("The train's 'stations' string from bdz_search_routes, one per leg in order. Required with check_availability."),
       },
     },
-    async ({ legs, passengers }: { legs: LegArgs[]; passengers: PassengerArgs[] }) =>
-      handle(async () => {
-        const ticket = buildTicketObject({ legs, passengers });
-        const total = await quotePrice(ticket);
-        return {
-          total_price: total,
-          currency: "EUR",
-          ticket_class: ticketClassForSeatType(legs[0]!.seat_type_id),
-          passengers: passengers.length,
-          legs: legs.length,
-        };
-      }),
+    async (args: QuoteArgs) => handle(() => quoteImpl(args)),
   );
 }

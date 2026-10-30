@@ -17,6 +17,22 @@ export function setPendingPurchase(p: PendingPurchase) {
   last = p;
 }
 
+/**
+ * Store a new pending purchase and report the one it replaced. BDZ allows only ONE
+ * pending purchase per account: creating a second reservation releases the first
+ * server-side, so the previous slot is returned (when it was still live) for the
+ * caller to warn about. Only call this after the BDZ create succeeded.
+ */
+export function beginPendingPurchase(p: PendingPurchase): { superseded: PendingPurchase | null } {
+  const previous = last;
+  last = p;
+  const live =
+    previous &&
+    previous.ticket_ids.length > 0 &&
+    Date.now() - previous.created_at_ms <= SESSION_TTL_MS;
+  return { superseded: live ? previous : null };
+}
+
 export function getPendingPurchase(): PendingPurchase | null {
   return last;
 }

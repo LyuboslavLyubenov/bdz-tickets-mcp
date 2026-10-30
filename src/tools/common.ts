@@ -1,4 +1,4 @@
-import { BdzApiError } from "../api/errors.ts";
+import { BdzApiError, mapBdzErrorMessage } from "../api/errors.ts";
 import { StationResolutionError } from "../domain/nomenclatures-cache.ts";
 
 export function jsonResult(data: unknown) {
@@ -19,6 +19,13 @@ export async function handle(fn: () => Promise<unknown>) {
   } catch (e) {
     if (e instanceof StationResolutionError) return errorResult(e.message);
     if (e instanceof BdzApiError) {
+      const mapped = mapBdzErrorMessage(e.message);
+      if (mapped) {
+        return errorResult(
+          `BDZ error [${mapped.code}] (HTTP ${e.status}): ${e.message}\n` +
+            `Meaning: ${mapped.meaning}\nGuidance: ${mapped.guidance}`,
+        );
+      }
       return errorResult(
         `BDZ API error (HTTP ${e.status}): ${e.message}` +
           (e.body && typeof e.body === "object" && Object.keys(e.body as object).length

@@ -185,6 +185,12 @@ GET api/Payment/Get/BoricaRequest?transactionId=N      // or EpayRequest
 ```
 Card entry happens on the gateway; the MCP has nothing to do there. Note that `?&totalPrice=` keeps its literal `&` prefix because that is what the SPA sends.
 
+Verified live 2026-10-26: BORICA answers with shape (b) — it never produces a directly
+openable URL, the SPA auto-POSTs the form for the user. The server now hosts that form itself
+(`src/api/payserver.ts`, `http://127.0.0.1:<port>/pay/<transactionId>`). ePay is the only
+operator expected to answer with shape (a), a plain link. The 2026-10-26 booking died because
+the BORICA payload never reached the user's browser before the 10-minute window closed.
+
 ### 3.8 Payment status + tickets
 ```
 GET  api/Payment/CheckPayment?<query>                   // poll after gateway return
@@ -198,6 +204,28 @@ POST api/Ticket/GetOldUserTickets                        // archived tickets
 GET  api/ticket/GetTicketPdf?ticketId=66580738
 → {fileName:"Ticket_044012197955.pdf", pdf:"<base64>"}   // verified real PDF
 ```
+
+statusID 15, status "Отказано плащане от оператор", observed 2026-10-11 and 2026-10-26:
+the pending reservation expired or the payment was never completed. CheckPayment for both
+transactions returns BORICA status report `action:"3", trtype:"90", rc:"-24"` with empty
+approval/card fields. This is an unpaid-expired transaction, NOT a card decline.
+
+### 3.11 Constraints learned live (2026-10-22/26 booking sessions)
+- ONE pending purchase per account. A second `GetTicket?onlyPrice=false` silently releases the
+  first reservation (observed: outbound 67815925 vanished when the return leg was created).
+  The server guards this (`decideCreate` + `supersede`).
+- `GetTicket?onlyPrice=true` quotes do not check seat availability: a sold-out combination
+  still returns a total. Round-trip discount (~30% off the return leg) applies only inside one
+  combined booking; two one-way bookings priced 2 x 20.20 EUR where the combined booking
+  quoted 27.87 EUR. The combined booking itself was refused with
+  "Няма достатъчно спални места от поисканата класа" while both per-leg seat maps showed free
+  berths — do not retry the combined call, book legs one at a time.
+- `POST api/schema/info` (seat map) answers HTTP 400 "Няма намерени свободни места!" when the
+  chosen class is sold out on that train/date; it is a sold-out signal, not a malfunction.
+- Search result flags (`first_class`, `berth`/sleeper_available) describe the train's coaches,
+  not free seats. Sleeper-1st berths for a popular night train sold out within ~1 hour.
+- Past departures are filtered from same-day searches: searching at 17:00 for today returns
+  only evening trains.
 
 ### 3.9 Other known endpoints
 ~~`api/Account/{Register, ChangePassword, ChangePhone, ChangeBirthDate, ChangeGender, ForgotPassword, PasswordReset}`~~: account-management tools declined by the user (2026-10-10), do not build. `api/Ticket/ReclamationRequest` + `CancelReclamationRequest?ticketID=` (refund requests, v2 candidate) · `api/Content/GetStaticTexts?view=` · `api/Ticket/GetDepartureTrainInfoList` / `GetArrivalTrainInfoList` · `api/Service/WriteJavascriptExceptionToLog`.
